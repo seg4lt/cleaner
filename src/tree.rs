@@ -137,25 +137,67 @@ fn add_path_to_tree(parent: &mut TreeNode, path: &Path, is_dir: bool, repo_path:
         return;
     }
 
-    // Build the path string for the ID
-    let path_str = path.to_string_lossy().to_string();
-    let name = components[components.len() - 1]
-        .as_os_str()
-        .to_string_lossy()
-        .to_string();
+    // Build the tree structure recursively
+    insert_path_components(parent, &components, 0, is_dir, repo_path);
+}
 
-    // Check if this exact path already exists as a child
-    let exists = parent.children.iter().any(|child| child.id == path_str);
+fn insert_path_components(
+    parent: &mut TreeNode,
+    components: &[std::path::Component],
+    depth: usize,
+    final_is_dir: bool,
+    repo_path: &Path,
+) {
+    if depth >= components.len() {
+        return;
+    }
 
-    if !exists {
-        let node = TreeNode::new(
+    let component = &components[depth];
+    let name = component.as_os_str().to_string_lossy().to_string();
+
+    // Build the full path up to this component
+    let partial_path: PathBuf = components.iter().take(depth + 1).collect();
+    let path_str = partial_path.to_string_lossy().to_string();
+
+    // Check if this component already exists as a child
+    let child_index = parent.children.iter().position(|child| child.label == name);
+
+    if let Some(index) = child_index {
+        // Component exists, recurse into it
+        if depth + 1 < components.len() {
+            insert_path_components(
+                &mut parent.children[index],
+                components,
+                depth + 1,
+                final_is_dir,
+                repo_path,
+            );
+        }
+    } else {
+        // Component doesn't exist, create it
+        let is_last = depth == components.len() - 1;
+        let is_dir = if is_last { final_is_dir } else { true };
+
+        let mut new_node = TreeNode::new(
             path_str.clone(),
             name,
             is_dir,
             parent.depth + 1,
             repo_path.to_path_buf(),
         );
-        parent.children.push(node);
+
+        // If there are more components, recurse
+        if !is_last {
+            insert_path_components(
+                &mut new_node,
+                components,
+                depth + 1,
+                final_is_dir,
+                repo_path,
+            );
+        }
+
+        parent.children.push(new_node);
     }
 }
 
