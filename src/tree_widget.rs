@@ -8,17 +8,14 @@ use ratatui::{
 
 use crate::tree::Tree;
 
-// Lazygit-inspired colors
 const COLOR_SELECTED_BG: Color = Color::Blue;
-const COLOR_MARKED: Color = Color::Red;
-const COLOR_DEFAULT: Color = Color::Reset;
 const COLOR_BORDER_ACTIVE: Color = Color::Green;
-const COLOR_BORDER_INACTIVE: Color = Color::Reset;
 const COLOR_TEXT: Color = Color::Reset;
 const COLOR_DIR: Color = Color::Blue;
 const COLOR_HELP_TEXT: Color = Color::Blue;
+const COLOR_TREE_LINES: Color = Color::DarkGray;
+const COLOR_MARKED: Color = Color::Red;
 
-/// State for the tree widget
 #[derive(Debug, Default)]
 pub struct TreeWidgetState {
     pub selected_index: usize,
@@ -48,7 +45,6 @@ impl TreeWidgetState {
     }
 }
 
-/// The tree widget for rendering the file tree
 pub struct TreeWidget<'a> {
     tree: &'a Tree,
     title: String,
@@ -64,7 +60,6 @@ impl<'a> StatefulWidget for TreeWidget<'a> {
     type State = TreeWidgetState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        // Render the main block with border
         let block = Block::default()
             .title(self.title.clone())
             .borders(Borders::ALL)
@@ -73,15 +68,24 @@ impl<'a> StatefulWidget for TreeWidget<'a> {
         let inner_area = block.inner(area);
         block.render(area, buf);
 
-        // Get visible nodes
         let visible_nodes: Vec<_> = self.tree.flatten_visible();
 
-        // Render tree items
+        // Ensure selected_index is always valid
+        if !visible_nodes.is_empty() && state.selected_index >= visible_nodes.len() {
+            state.selected_index = visible_nodes.len() - 1;
+        }
+
         let max_items = inner_area.height as usize;
-        let start_index = if state.selected_index >= max_items {
-            state.selected_index - max_items + 1
-        } else {
+        let half_height = max_items / 2;
+
+        let start_index = if visible_nodes.len() <= max_items {
             0
+        } else if state.selected_index <= half_height {
+            0
+        } else if state.selected_index >= visible_nodes.len() - half_height {
+            visible_nodes.len() - max_items
+        } else {
+            state.selected_index - half_height
         };
 
         for (i, node) in visible_nodes
@@ -98,60 +102,37 @@ impl<'a> StatefulWidget for TreeWidget<'a> {
             let actual_index = start_index + i;
             let is_selected = actual_index == state.selected_index;
 
-            // Build the line content
             let mut spans = Vec::new();
 
-            // Indentation
-            let indent = "  ".repeat(node.depth);
-            spans.push(Span::styled(indent, Style::default().fg(COLOR_TEXT)));
+            let tree_lines = calculate_tree_lines(&visible_nodes, actual_index);
+            spans.push(Span::styled(
+                tree_lines,
+                Style::default().fg(COLOR_TREE_LINES),
+            ));
 
-            // Radio button (selected or not)
-            let radio = if is_selected { "◉ " } else { "○ " };
-            spans.push(Span::styled(radio, Style::default().fg(COLOR_TEXT)));
+            let checkbox = if node.is_marked { "☑ " } else { "☐ " };
+            spans.push(Span::styled(checkbox, Style::default().fg(COLOR_TEXT)));
 
-            // Mark indicator (if marked for deletion)
-            if node.is_marked {
-                spans.push(Span::styled("✗ ", Style::default().fg(COLOR_MARKED)));
-            } else {
-                spans.push(Span::styled("  ", Style::default()));
-            }
-
-            // Directory/File icon and name
             let name_style = if node.is_dir {
                 Style::default().fg(COLOR_DIR)
             } else {
                 Style::default().fg(COLOR_TEXT)
             };
 
-            let icon = if node.is_dir {
-                if node.is_expanded {
-                    "📂 "
-                } else {
-                    "📁 "
-                }
-            } else {
-                "📄 "
-            };
-
-            spans.push(Span::styled(icon, name_style));
             spans.push(Span::styled(node.label.clone(), name_style));
 
-            // Create the line
             let line = Line::from(spans);
 
-            // Render with background if selected
             let style = if is_selected {
                 Style::default().bg(COLOR_SELECTED_BG)
             } else {
                 Style::default()
             };
 
-            // Clear the line first
             for x in inner_area.x..inner_area.x + inner_area.width {
                 buf[(x, row)].set_char(' ').set_style(style);
             }
 
-            // Render the line
             let mut current_x = inner_area.x;
             for span in line.iter() {
                 let content = span.content.as_ref();
@@ -170,7 +151,6 @@ impl<'a> StatefulWidget for TreeWidget<'a> {
             }
         }
 
-        // Render confirmation dialog if needed
         if state.show_confirmation {
             render_confirmation_dialog(area, buf, &state.confirmation_message);
         }
@@ -186,10 +166,8 @@ fn render_confirmation_dialog(area: Rect, buf: &mut Buffer, message: &str) {
 
     let dialog_area = Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
 
-    // Clear the area
     Clear.render(dialog_area, buf);
 
-    // Render dialog block
     let block = Block::default()
         .title("Confirm")
         .borders(Borders::ALL)
@@ -198,7 +176,6 @@ fn render_confirmation_dialog(area: Rect, buf: &mut Buffer, message: &str) {
     let inner_area = block.inner(dialog_area);
     block.render(dialog_area, buf);
 
-    // Render message
     let text = Paragraph::new(message)
         .alignment(Alignment::Center)
         .wrap(ratatui::widgets::Wrap { trim: true });
@@ -211,7 +188,6 @@ fn render_confirmation_dialog(area: Rect, buf: &mut Buffer, message: &str) {
     );
     text.render(text_area, buf);
 
-    // Render help text
     let help = Paragraph::new("(y)es / (n)o")
         .alignment(Alignment::Center)
         .style(Style::default().fg(COLOR_HELP_TEXT));
@@ -225,7 +201,6 @@ fn render_confirmation_dialog(area: Rect, buf: &mut Buffer, message: &str) {
     help.render(help_area, buf);
 }
 
-/// Help widget for the bottom of the screen
 pub struct HelpWidget;
 
 impl Widget for HelpWidget {
@@ -239,7 +214,6 @@ impl Widget for HelpWidget {
     }
 }
 
-/// Results widget for showing deletion results
 pub struct ResultsWidget {
     pub deleted: Vec<String>,
     pub failed: Vec<(String, String)>,
@@ -257,7 +231,6 @@ impl Widget for ResultsWidget {
 
         let mut lines = Vec::new();
 
-        // Show successfully deleted
         if !self.deleted.is_empty() {
             lines.push(Line::from(vec![
                 Span::styled(
@@ -280,7 +253,6 @@ impl Widget for ResultsWidget {
             lines.push(Line::from(""));
         }
 
-        // Show failed deletions
         if !self.failed.is_empty() {
             lines.push(Line::from(vec![
                 Span::styled(
@@ -317,5 +289,124 @@ impl Widget for ResultsWidget {
         let paragraph = Paragraph::new(text).wrap(ratatui::widgets::Wrap { trim: true });
 
         paragraph.render(inner_area, buf);
+    }
+}
+
+fn calculate_tree_lines(visible_nodes: &[&crate::tree::TreeNode], current_index: usize) -> String {
+    let node = &visible_nodes[current_index];
+    let depth = node.depth;
+
+    if depth == 0 {
+        return String::new();
+    }
+
+    let mut lines = String::new();
+
+    for d in 0..depth - 1 {
+        let parent_at_depth = find_parent_at_depth(visible_nodes, current_index, d);
+
+        if let Some(parent_idx) = parent_at_depth {
+            if has_more_siblings(visible_nodes, parent_idx, current_index) {
+                lines.push('│');
+                lines.push(' ');
+            } else {
+                lines.push(' ');
+                lines.push(' ');
+            }
+        } else {
+            lines.push(' ');
+            lines.push(' ');
+        }
+    }
+
+    let parent_at_last_depth = find_parent_at_depth(visible_nodes, current_index, depth - 1);
+    if let Some(parent_idx) = parent_at_last_depth {
+        if has_more_siblings(visible_nodes, parent_idx, current_index) {
+            lines.push_str("├─");
+        } else {
+            lines.push_str("└─");
+        }
+    } else {
+        lines.push_str("──");
+    }
+
+    lines.push(' ');
+    lines
+}
+
+fn find_parent_at_depth(
+    visible_nodes: &[&crate::tree::TreeNode],
+    node_index: usize,
+    target_depth: usize,
+) -> Option<usize> {
+    let node = visible_nodes[node_index];
+
+    for i in (0..node_index).rev() {
+        let candidate = visible_nodes[i];
+        if candidate.depth == target_depth && is_ancestor(candidate, node) {
+            return Some(i);
+        }
+    }
+
+    None
+}
+
+fn is_ancestor(parent: &crate::tree::TreeNode, child: &crate::tree::TreeNode) -> bool {
+    if parent.id.is_empty() {
+        return true;
+    }
+    child.id.starts_with(&parent.id) && child.id.len() > parent.id.len()
+}
+
+fn has_more_siblings(
+    visible_nodes: &[&crate::tree::TreeNode],
+    parent_index: usize,
+    current_child_index: usize,
+) -> bool {
+    let parent = visible_nodes[parent_index];
+    let parent_depth = parent.depth;
+    let child_depth = parent_depth + 1;
+
+    let mut found_current = false;
+    let mut has_more = false;
+
+    for i in (parent_index + 1)..visible_nodes.len() {
+        let node = visible_nodes[i];
+
+        if node.depth <= parent_depth {
+            break;
+        }
+
+        if node.depth == child_depth && is_direct_child(parent, node) {
+            if i == current_child_index {
+                found_current = true;
+            } else if found_current {
+                has_more = true;
+                break;
+            }
+        }
+    }
+
+    has_more
+}
+
+fn is_direct_child(parent: &crate::tree::TreeNode, child: &crate::tree::TreeNode) -> bool {
+    if child.depth != parent.depth + 1 {
+        return false;
+    }
+
+    let parent_prefix = if parent.id.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", parent.id)
+    };
+
+    if child.id.starts_with(&parent_prefix) {
+        let remainder = &child.id[parent_prefix.len()..];
+        !remainder.contains('/')
+    } else if parent.id.is_empty() {
+        !child.id.contains('/')
+    } else {
+        false
     }
 }

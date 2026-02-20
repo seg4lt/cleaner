@@ -184,12 +184,10 @@ impl App {
         let visible = self.tree.flatten_visible();
         if let Some(node) = visible.get(self.state.selected_index) {
             let node_id = node.id.clone();
-            if let Some(node_mut) = self.tree.get_node_mut(&node_id) {
+            let repo_path = node.repo_path.clone();
+            if let Some(node_mut) = self.tree.get_node_mut_in_repo(&repo_path, &node_id) {
                 if node_mut.is_dir && node_mut.is_expanded {
                     node_mut.is_expanded = false;
-                } else if node_mut.depth > 0 {
-                    // Try to find parent and select it
-                    self.select_parent(&node_id);
                 }
             }
         }
@@ -199,12 +197,10 @@ impl App {
         let visible = self.tree.flatten_visible();
         if let Some(node) = visible.get(self.state.selected_index) {
             let node_id = node.id.clone();
-            if let Some(node_mut) = self.tree.get_node_mut(&node_id) {
+            let repo_path = node.repo_path.clone();
+            if let Some(node_mut) = self.tree.get_node_mut_in_repo(&repo_path, &node_id) {
                 if node_mut.is_dir && !node_mut.is_expanded {
                     node_mut.is_expanded = true;
-                } else if node_mut.is_dir && node_mut.is_expanded && !node_mut.children.is_empty() {
-                    // Move to first child
-                    self.state.select_next(self.tree.flatten_visible().len());
                 }
             }
         }
@@ -214,7 +210,8 @@ impl App {
         let visible = self.tree.flatten_visible();
         if let Some(node) = visible.get(self.state.selected_index) {
             let node_id = node.id.clone();
-            if let Some(node_mut) = self.tree.get_node_mut(&node_id) {
+            let repo_path = node.repo_path.clone();
+            if let Some(node_mut) = self.tree.get_node_mut_in_repo(&repo_path, &node_id) {
                 node_mut.toggle_marked();
             }
         }

@@ -80,6 +80,12 @@ impl Tree {
             // Sort children: directories first, then alphabetically
             sort_children(&mut root);
 
+            // Flatten directories that only have single directory children
+            flatten_empty_directories(&mut root);
+
+            // Recalculate depths after flattening
+            recalculate_depths(&mut root, 0);
+
             tree.roots.push(root);
         }
 
@@ -100,6 +106,16 @@ impl Tree {
         for root in &mut self.roots {
             if let Some(node) = find_node_mut(root, id) {
                 return Some(node);
+            }
+        }
+        None
+    }
+
+    /// Get mutable reference to a node by repository and node ID
+    pub fn get_node_mut_in_repo(&mut self, repo_path: &Path, id: &str) -> Option<&mut TreeNode> {
+        for root in &mut self.roots {
+            if root.repo_path == repo_path {
+                return find_node_mut(root, id);
             }
         }
         None
@@ -212,6 +228,42 @@ fn sort_children(node: &mut TreeNode) {
     // Recursively sort children
     for child in &mut node.children {
         sort_children(child);
+    }
+}
+
+/// Flatten directories that only have a single directory child (no files)
+/// This creates paths like "a/b/c" instead of nested directories when there are no files at intermediate levels
+fn flatten_empty_directories(node: &mut TreeNode) {
+    // First recursively flatten children
+    for child in &mut node.children {
+        flatten_empty_directories(child);
+    }
+
+    // Check if this directory has only one child and that child is a directory
+    if node.is_dir && node.children.len() == 1 {
+        let child = &node.children[0];
+        if child.is_dir {
+            // Merge the child into this node
+            let child_label = child.label.clone();
+            let child_id = child.id.clone();
+            let grand_children = child.children.clone();
+
+            // Update this node's label to include the child
+            node.label = format!("{}/{}", node.label, child_label);
+            node.id = child_id;
+            node.children = grand_children;
+
+            // Recursively flatten again in case there are more single-dir chains
+            flatten_empty_directories(node);
+        }
+    }
+}
+
+/// Recalculate depths for all nodes after flattening
+fn recalculate_depths(node: &mut TreeNode, new_depth: usize) {
+    node.depth = new_depth;
+    for child in &mut node.children {
+        recalculate_depths(child, new_depth + 1);
     }
 }
 
