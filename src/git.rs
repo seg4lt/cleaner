@@ -1,6 +1,5 @@
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 
 /// Find all git repository roots within the given folder
@@ -83,71 +82,4 @@ fn find_submodule_dirs(repo_root: &Path) -> Vec<PathBuf> {
             }
         })
         .collect()
-}
-
-/// Get untracked files for a git repository
-/// Returns list of (path, is_directory) tuples
-pub fn get_untracked_files(repo_path: &Path) -> Vec<(PathBuf, bool)> {
-    // Get both untracked and ignored files in one command
-    // Using --porcelain without -uall to get only top-level items
-    let output = Command::new("git")
-        .args(&["status", "--porcelain", "--ignored"])
-        .current_dir(repo_path)
-        .output();
-
-    match output {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            parse_untracked_files(repo_path, &stdout)
-        }
-        _ => Vec::new(),
-    }
-}
-
-fn parse_untracked_files(repo_path: &Path, git_output: &str) -> Vec<(PathBuf, bool)> {
-    let mut untracked = Vec::new();
-    let mut seen_dirs = std::collections::HashSet::new();
-
-    for line in git_output.lines() {
-        // Lines starting with "??" are untracked, "!!" are ignored
-        if line.starts_with("?? ") || line.starts_with("!! ") {
-            let path_str = &line[3..];
-            let full_path = repo_path.join(path_str);
-
-            // Check if it's a directory
-            let is_dir = full_path.is_dir();
-
-            if is_dir {
-                // For directories, add only the top-level directory
-                // and skip any files within it
-                let path = PathBuf::from(path_str);
-                if let Some(first_component) = path.components().next() {
-                    let first_path = PathBuf::from(first_component.as_os_str());
-                    if seen_dirs.insert(first_path.clone()) {
-                        untracked.push((first_path, true));
-                    }
-                }
-            } else {
-                // For files, check if they're in an already-tracked directory
-                let path = PathBuf::from(path_str);
-
-                // Check if any parent directory is already in our untracked list
-                let mut in_untracked_dir = false;
-                for (untracked_path, is_untracked_dir) in &untracked {
-                    if *is_untracked_dir {
-                        if path.starts_with(untracked_path) {
-                            in_untracked_dir = true;
-                            break;
-                        }
-                    }
-                }
-
-                if !in_untracked_dir {
-                    untracked.push((path, false));
-                }
-            }
-        }
-    }
-
-    untracked
 }

@@ -5,11 +5,7 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    buffer::Buffer,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, StatefulWidget, Widget},
+    layout::{Constraint, Direction, Layout},
     Terminal,
 };
 use std::io::{self, stdout};
@@ -101,8 +97,7 @@ impl App {
         }
 
         // Build a repo-only tree (one row per repo)
-        let repo_data: Vec<_> = repos.into_iter().map(|repo| (repo, Vec::new())).collect();
-        let tree = Tree::build(repo_data);
+        let tree = Tree::build(repos);
 
         let mut state = TreeWidgetState::new();
 
@@ -308,7 +303,7 @@ impl App {
                 self.state.show_confirmation = true;
             }
             RunMode::ConfirmEach => {
-                let mut flow = ConfirmEachFlow {
+                let flow = ConfirmEachFlow {
                     commands,
                     index: 0,
                     succeeded: Vec::new(),
@@ -419,8 +414,7 @@ impl App {
         let (tx, rx) = channel();
         thread::spawn(move || {
             let repos = find_git_repos(&folder);
-            let repo_data: Vec<_> = repos.into_iter().map(|repo| (repo, Vec::new())).collect();
-            let tree = Tree::build(repo_data);
+            let tree = Tree::build(repos);
             let _ = tx.send(ScanWorkerResult::Tree(tree));
         });
         self.scan_receiver = Some(rx);

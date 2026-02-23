@@ -15,7 +15,6 @@ const COLOR_TEXT: Color = Color::Reset;
 const COLOR_DIR: Color = Color::Blue;
 const COLOR_HELP_TEXT: Color = Color::Blue;
 const COLOR_TREE_LINES: Color = Color::DarkGray;
-const COLOR_MARKED: Color = Color::Red;
 const COLOR_ACTION_CLEAN: Color = Color::Green;
 const COLOR_ACTION_DELETE: Color = Color::Red;
 
@@ -475,8 +474,6 @@ fn ancestor_has_more_children_after(
     current_idx: usize,
 ) -> bool {
     let ancestor = visible_nodes[ancestor_idx];
-    let current = visible_nodes[current_idx];
-
     // Find all direct children of this ancestor
     let mut children_ranges: Vec<(usize, usize)> = Vec::new(); // (start, end) indices for each child
     let mut current_child_start: Option<usize> = None;
