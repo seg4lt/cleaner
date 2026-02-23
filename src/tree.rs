@@ -1,5 +1,22 @@
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeAction {
+    None,
+    Clean,
+    Delete,
+}
+
+impl NodeAction {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::None => Self::Clean,
+            Self::Clean => Self::Delete,
+            Self::Delete => Self::None,
+        }
+    }
+}
+
 /// A node in the tree structure
 #[derive(Debug, Clone)]
 pub struct TreeNode {
@@ -8,10 +25,11 @@ pub struct TreeNode {
     pub is_dir: bool,      // Is this a directory?
     pub is_expanded: bool, // Is this directory expanded?
     pub is_selected: bool, // Is this node currently selected (for navigation)?
-    pub is_marked: bool,   // Is this node marked for deletion?
+    pub action: NodeAction, // Action to run for this node
     pub depth: usize,      // Depth in the tree (for indentation)
     pub children: Vec<TreeNode>,
     pub repo_path: PathBuf, // Path to the git repository root
+    pub size: Option<u64>,  // Size in bytes (None if not calculated yet)
 }
 
 impl TreeNode {
@@ -22,11 +40,26 @@ impl TreeNode {
             is_dir,
             is_expanded: true, // Directories start expanded
             is_selected: false,
-            is_marked: false,
+            action: NodeAction::None,
             depth,
             children: Vec::new(),
             repo_path,
+            size: None,
         }
+    }
+
+    /// Get size as human readable string
+    pub fn size_str(&self) -> String {
+        match self.size {
+            Some(size) => format_size(size),
+            None => String::new(),
+        }
+    }
+
+    /// Calculate size for this node (file size or total directory size)
+    pub fn calculate_size(&mut self) {
+        let full_path = self.full_path();
+        self.size = Some(calculate_path_size(&full_path));
     }
 
     /// Toggle expansion state for directories
@@ -36,9 +69,17 @@ impl TreeNode {
         }
     }
 
-    /// Toggle marked state
-    pub fn toggle_marked(&mut self) {
-        self.is_marked = !self.is_marked;
+    /// Cycle action state (none -> clean -> delete -> none)
+    pub fn cycle_action(&mut self) {
+        // Top-level repo rows (depth 0) and regular nodes can be marked
+        if self.depth == 0 || !self.id.is_empty() {
+            self.action = self.action.cycle();
+        }
+    }
+
+    /// Check if this node can be marked for deletion
+    pub fn can_be_marked(&self) -> bool {
+        self.depth == 0 || !self.id.is_empty()
     }
 
     /// Get the full absolute path
@@ -61,35 +102,41 @@ impl Tree {
     /// Build the tree from git repositories and their untracked files
     pub fn build(repo_data: Vec<(PathBuf, Vec<(PathBuf, bool)>)>) -> Self {
         let mut tree = Self::new();
-
         for (repo_path, untracked_files) in repo_data {
-            // Create a root node for this repository
-            let repo_name = repo_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
+            tree.add_repo(repo_path, untracked_files);
+        }
+        tree
+    }
 
-            let mut root = TreeNode::new("".to_string(), repo_name, true, 0, repo_path.clone());
+    /// Add a single repository to the tree
+    pub fn add_repo(&mut self, repo_path: PathBuf, untracked_files: Vec<(PathBuf, bool)>) {
+        // Create a root node for this repository
+        let repo_name = repo_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
 
-            // Build the tree structure from untracked files
-            for (path, is_dir) in untracked_files {
-                add_path_to_tree(&mut root, &path, is_dir, &repo_path);
-            }
+        let mut root = TreeNode::new("".to_string(), repo_name, true, 0, repo_path.clone());
 
-            // Sort children: directories first, then alphabetically
-            sort_children(&mut root);
-
-            // Flatten directories that only have single directory children
-            flatten_empty_directories(&mut root);
-
-            // Recalculate depths after flattening
-            recalculate_depths(&mut root, 0);
-
-            tree.roots.push(root);
+        // Build the tree structure from untracked files
+        for (path, is_dir) in untracked_files {
+            add_path_to_tree(&mut root, &path, is_dir, &repo_path);
         }
 
-        tree
+        // Sort children: directories first, then alphabetically
+        sort_children(&mut root);
+
+        // Flatten directories that only have single directory children
+        flatten_empty_directories(&mut root);
+
+        // Recalculate depths after flattening
+        recalculate_depths(&mut root, 0);
+
+        // Calculate sizes for all nodes
+        calculate_sizes_recursive(&mut root);
+
+        self.roots.push(root);
     }
 
     /// Flatten the tree into a list of visible nodes for rendering
@@ -292,7 +339,7 @@ fn find_node_mut<'a>(node: &'a mut TreeNode, id: &str) -> Option<&'a mut TreeNod
 }
 
 fn collect_marked<'a>(node: &'a TreeNode, marked: &mut Vec<&'a TreeNode>) {
-    if node.is_marked {
+    if node.action != NodeAction::None {
         marked.push(node);
     }
 
@@ -301,9 +348,69 @@ fn collect_marked<'a>(node: &'a TreeNode, marked: &mut Vec<&'a TreeNode>) {
     }
 }
 
+/// Format bytes to human readable string
+fn format_size(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "K", "M", "G", "T"];
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+
+    if unit_index == 0 {
+        format!("{} {}", bytes, UNITS[unit_index])
+    } else {
+        format!("{:.1} {}", size, UNITS[unit_index])
+    }
+}
+
+/// Calculate total size of a path (file or directory)
+fn calculate_path_size(path: &Path) -> u64 {
+    if path.is_file() {
+        std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+    } else if path.is_dir() {
+        let mut total = 0u64;
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                total += calculate_path_size(&entry.path());
+            }
+        }
+        total
+    } else {
+        0
+    }
+}
+
 fn clear_selections_recursive(node: &mut TreeNode) {
     node.is_selected = false;
     for child in &mut node.children {
         clear_selections_recursive(child);
+    }
+}
+
+/// Calculate sizes for all nodes recursively
+fn calculate_sizes_recursive(node: &mut TreeNode) {
+    // First calculate sizes for all children
+    for child in &mut node.children {
+        calculate_sizes_recursive(child);
+    }
+
+    // Calculate this node's size
+    if node.is_dir {
+        if node.id.is_empty() {
+            // Repo root should reflect the total size of displayed cleanup items, not the whole repo.
+            let total: u64 = node.children.iter().filter_map(|c| c.size).sum();
+            node.size = Some(total);
+        } else {
+            // Directory nodes may be represented without expanded children in the tree, so
+            // compute their actual on-disk size directly.
+            node.size = Some(calculate_path_size(&node.full_path()));
+        }
+    } else {
+        // For files, get the file size
+        let full_path = node.full_path();
+        node.size = std::fs::metadata(&full_path).ok().map(|m| m.len());
     }
 }
