@@ -250,7 +250,7 @@ fn render_loading_dialog(area: Rect, buf: &mut Buffer, message: &str, frame: usi
     let spinner = SPINNER[frame % SPINNER.len()];
 
     let dialog_width = 60;
-    let dialog_height = 7;
+    let dialog_height = 8;
 
     let dialog_x = (area.width.saturating_sub(dialog_width)) / 2;
     let dialog_y = (area.height.saturating_sub(dialog_height)) / 2;
@@ -272,11 +272,39 @@ fn render_loading_dialog(area: Rect, buf: &mut Buffer, message: &str, frame: usi
 
     let text_area = Rect::new(
         inner_area.x,
-        inner_area.y + 1,
+        inner_area.y,
         inner_area.width,
-        inner_area.height - 2,
+        inner_area.height - 3,
     );
     text.render(text_area, buf);
+
+    let bar_width = inner_area.width.saturating_sub(8) as usize;
+    let bar = format!("[{}]", animated_bar(bar_width, frame));
+    let bar_paragraph = Paragraph::new(bar)
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(COLOR_HELP_TEXT));
+    let bar_area = Rect::new(inner_area.x, inner_area.y + inner_area.height - 2, inner_area.width, 1);
+    bar_paragraph.render(bar_area, buf);
+}
+
+fn animated_bar(width: usize, frame: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+
+    let mut chars = vec!['-'; width];
+    let segment_len = (width / 4).max(1);
+    let cycle = width + segment_len;
+    let offset = frame % cycle;
+
+    for i in 0..segment_len {
+        let pos = offset + i;
+        if pos < width {
+            chars[pos] = '=';
+        }
+    }
+
+    chars.into_iter().collect()
 }
 
 pub struct HelpWidget;
@@ -284,7 +312,7 @@ pub struct HelpWidget;
 impl Widget for HelpWidget {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let help_text =
-            "j/k: Navigate | Space: Cycle [clean/delete] | m: Mode | Enter: Run | q: Quit";
+            "j/k: Navigate | Space: Cycle [clean/delete] | m: Mode | r: Refresh | Enter: Run | q: Quit";
         let help = Paragraph::new(help_text)
             .alignment(Alignment::Center)
             .style(Style::default().fg(COLOR_HELP_TEXT));

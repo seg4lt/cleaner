@@ -7,7 +7,9 @@ use std::sync::Mutex;
 pub fn find_git_repos(folder: &Path) -> Vec<PathBuf> {
     let repos = Mutex::new(Vec::new());
     find_git_repos_parallel(folder, &repos);
-    repos.into_inner().unwrap()
+    let mut repos = repos.into_inner().unwrap();
+    repos.sort();
+    repos
 }
 
 fn find_git_repos_parallel(folder: &Path, repos: &Mutex<Vec<PathBuf>>) {

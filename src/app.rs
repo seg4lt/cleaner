@@ -73,6 +73,10 @@ enum RunWorkerResult {
     },
 }
 
+enum ScanWorkerResult {
+    Tree(Tree),
+}
+
 pub struct App {
     folder: PathBuf,
     tree: Tree,
@@ -83,9 +87,8 @@ pub struct App {
     confirmation_flow: Option<ConfirmationFlow>,
     loading: bool,
     run_receiver: Option<Receiver<RunWorkerResult>>,
+    scan_receiver: Option<Receiver<ScanWorkerResult>>,
     last_spinner_tick: Instant,
-    repo_receiver: Option<Receiver<(PathBuf, Vec<(PathBuf, bool)>)>>,
-    repos_found: usize,
 }
 
 impl App {
@@ -119,9 +122,8 @@ impl App {
             confirmation_flow: None,
             loading: false,
             run_receiver: None,
+            scan_receiver: None,
             last_spinner_tick: Instant::now(),
-            repo_receiver: None,
-            repos_found: 0,
         })
     }
 
@@ -147,6 +149,7 @@ impl App {
         loop {
             self.tick_loading();
             self.poll_run_completion();
+            self.poll_scan_completion();
 
             let repo_count = self.tree.roots.len();
             let title = format!(
@@ -235,6 +238,9 @@ impl App {
                             }
                             KeyCode::Char('m') | KeyCode::Char('M') => {
                                 self.run_mode.toggle();
+                            }
+                            KeyCode::Char('r') | KeyCode::Char('R') => {
+                                self.start_refresh();
                             }
                             KeyCode::Enter => {
                                 self.show_delete_confirmation();
@@ -399,6 +405,27 @@ impl App {
         commands
     }
 
+    fn start_refresh(&mut self) {
+        if self.loading {
+            return;
+        }
+
+        self.loading = true;
+        self.state.loading_frame = 0;
+        self.last_spinner_tick = Instant::now();
+        self.state.loading_message = Some(format!("Refreshing repos in {}...", self.folder.display()));
+
+        let folder = self.folder.clone();
+        let (tx, rx) = channel();
+        thread::spawn(move || {
+            let repos = find_git_repos(&folder);
+            let repo_data: Vec<_> = repos.into_iter().map(|repo| (repo, Vec::new())).collect();
+            let tree = Tree::build(repo_data);
+            let _ = tx.send(ScanWorkerResult::Tree(tree));
+        });
+        self.scan_receiver = Some(rx);
+    }
+
     fn start_bulk_run(&mut self, commands: Vec<deletion::RepoCommand>) {
         let count = commands.len();
         self.loading = true;
@@ -482,6 +509,38 @@ impl App {
                 self.deletion_results = Some((
                     Vec::new(),
                     vec![("worker".to_string(), "Background worker disconnected".to_string())],
+                ));
+                self.show_results = true;
+            }
+        }
+    }
+
+    fn poll_scan_completion(&mut self) {
+        let Some(rx) = &self.scan_receiver else {
+            return;
+        };
+
+        match rx.try_recv() {
+            Ok(ScanWorkerResult::Tree(tree)) => {
+                self.loading = false;
+                self.state.loading_message = None;
+                self.scan_receiver = None;
+                self.tree = tree;
+                let visible_count = self.tree.flatten_visible().len();
+                if visible_count == 0 {
+                    self.state.selected_index = 0;
+                } else if self.state.selected_index >= visible_count {
+                    self.state.selected_index = visible_count - 1;
+                }
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.loading = false;
+                self.state.loading_message = None;
+                self.scan_receiver = None;
+                self.deletion_results = Some((
+                    Vec::new(),
+                    vec![("refresh".to_string(), "Refresh worker disconnected".to_string())],
                 ));
                 self.show_results = true;
             }
