@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, StatefulWidget, Widget},
 };
 
-use crate::tree::{NodeAction, Tree};
+use crate::tree::{NodeAction, NodeKind, Tree};
 
 const COLOR_SELECTED_BG: Color = Color::Blue;
 const COLOR_SELECTED_FG: Color = Color::White;
@@ -120,7 +120,10 @@ impl<'a> StatefulWidget for TreeWidget<'a> {
                 ("         ".to_string(), Style::default().fg(COLOR_TEXT))
             } else {
                 match node.action {
-                    NodeAction::None => ("[      ] ".to_string(), Style::default().fg(Color::DarkGray)),
+                    NodeAction::None => (
+                        "[      ] ".to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                     NodeAction::Clean => (
                         "[clean ] ".to_string(),
                         Style::default().fg(COLOR_ACTION_CLEAN),
@@ -141,23 +144,34 @@ impl<'a> StatefulWidget for TreeWidget<'a> {
 
             spans.push(Span::styled(node.label.clone(), name_style));
 
-            // In repo-list mode, show the full repo path in muted text.
-            if node.depth == 0 {
+            if node.kind != NodeKind::Section && !node.path.as_os_str().is_empty() {
                 spans.push(Span::styled(" ", Style::default()));
                 spans.push(Span::styled(
-                    format!("{}", node.repo_path.display()),
+                    format!("{}", node.path.display()),
                     Style::default().fg(Color::DarkGray),
                 ));
             }
 
-            // Hide synthetic root sizes in repo-list mode (they're not useful here)
-            let size_str = node.size_str();
-            if node.depth > 0 && !size_str.is_empty() {
-                spans.push(Span::styled(" ", Style::default()));
-                spans.push(Span::styled(
-                    format!("({})", size_str),
-                    Style::default().fg(Color::DarkGray),
-                ));
+            match node.kind {
+                NodeKind::Repo => {
+                    if let Some(estimates) = node.repo_sizes_display() {
+                        spans.push(Span::styled(" ", Style::default()));
+                        spans.push(Span::styled(
+                            format!("({})", estimates),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                }
+                NodeKind::GlobalPath => {
+                    if let Some(size_str) = node.global_size_display() {
+                        spans.push(Span::styled(" ", Style::default()));
+                        spans.push(Span::styled(
+                            format!("({})", size_str),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                }
+                NodeKind::Section => {}
             }
 
             let line = Line::from(spans);
@@ -282,7 +296,12 @@ fn render_loading_dialog(area: Rect, buf: &mut Buffer, message: &str, frame: usi
     let bar_paragraph = Paragraph::new(bar)
         .alignment(Alignment::Center)
         .style(Style::default().fg(COLOR_HELP_TEXT));
-    let bar_area = Rect::new(inner_area.x, inner_area.y + inner_area.height - 2, inner_area.width, 1);
+    let bar_area = Rect::new(
+        inner_area.x,
+        inner_area.y + inner_area.height - 2,
+        inner_area.width,
+        1,
+    );
     bar_paragraph.render(bar_area, buf);
 }
 
@@ -386,7 +405,7 @@ impl Widget for ResultsWidget {
 
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Press any key to exit...",
+            "Press any key to return...",
             Style::default().fg(COLOR_HELP_TEXT),
         )));
 

@@ -18,21 +18,21 @@ struct Cli {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    
+
     // Validate folder exists
     if !cli.folder.exists() {
         eprintln!("Error: Folder '{}' does not exist", cli.folder.display());
         std::process::exit(1);
     }
-    
+
     if !cli.folder.is_dir() {
         eprintln!("Error: '{}' is not a directory", cli.folder.display());
         std::process::exit(1);
     }
-    
+
     // Run the TUI application
     let mut app = app::App::new(cli.folder)?;
     app.run()?;
-    
+
     Ok(())
 }

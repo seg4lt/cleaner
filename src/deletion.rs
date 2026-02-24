@@ -1,5 +1,8 @@
 use rayon::prelude::*;
-use std::path::PathBuf;
+use std::env;
+use std::ffi::OsString;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,22 +21,53 @@ impl RepoCommandKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct RepoCommand {
+pub struct GlobalCleanupTarget {
+    pub label: String,
+    pub path: PathBuf,
+    pub is_dir: bool,
+    pub size: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RepoSavingsEstimate {
     pub repo_path: PathBuf,
-    pub kind: RepoCommandKind,
+    pub clean_size: Option<u64>,
+    pub delete_size: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RepoCommand {
+    Repo {
+        repo_path: PathBuf,
+        kind: RepoCommandKind,
+    },
+    GlobalDelete {
+        label: String,
+        path: PathBuf,
+    },
 }
 
 impl RepoCommand {
     pub fn display_label(&self) -> String {
-        format!("[{}] {}", self.kind.label(), self.repo_path.display())
+        match self {
+            Self::Repo { repo_path, kind } => {
+                format!("[{}] {}", kind.label(), repo_path.display())
+            }
+            Self::GlobalDelete { label, path } => {
+                format!("[delete] {} ({})", label, path.display())
+            }
+        }
     }
 }
 
 pub fn run_repo_command(command: &RepoCommand) -> Result<String, String> {
     let display = command.display_label();
-    let result = match command.kind {
-        RepoCommandKind::Clean => clean_repo(&command.repo_path),
-        RepoCommandKind::Delete => delete_repo_dir(&command.repo_path),
+    let result = match command {
+        RepoCommand::Repo { repo_path, kind } => match kind {
+            RepoCommandKind::Clean => clean_repo(repo_path),
+            RepoCommandKind::Delete => delete_path(repo_path),
+        },
+        RepoCommand::GlobalDelete { path, .. } => delete_path(path),
     };
 
     result.map(|_| display)
@@ -83,10 +117,10 @@ fn clean_repo(repo_path: &PathBuf) -> Result<(), String> {
     }
 }
 
-fn delete_repo_dir(repo_path: &PathBuf) -> Result<(), String> {
+fn delete_path(path: &PathBuf) -> Result<(), String> {
     let output = Command::new("rm")
         .arg("-rf")
-        .arg(repo_path)
+        .arg(path)
         .output()
         .map_err(|e| format!("Failed to run rm -rf: {}", e))?;
 
@@ -100,4 +134,172 @@ fn delete_repo_dir(repo_path: &PathBuf) -> Result<(), String> {
             Err(stderr)
         }
     }
+}
+
+pub fn discover_global_cleanup_targets() -> Vec<GlobalCleanupTarget> {
+    let Some(home) = env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+
+    let library = home.join("Library");
+
+    let candidates = [
+        ("SDKMAN installs/data", home.join(".sdkman")),
+        ("Ivy cache", home.join(".ivy2/cache")),
+        ("SBT data/cache", home.join(".sbt")),
+        ("Coursier cache", home.join(".cache/coursier")),
+        ("Coursier cache (macOS)", library.join("Caches/Coursier")),
+        ("Maven local repository", home.join(".m2/repository")),
+        ("Maven wrapper cache", home.join(".m2/wrapper")),
+        ("Gradle caches", home.join(".gradle/caches")),
+        ("Gradle wrapper cache", home.join(".gradle/wrapper")),
+        ("Gradle daemon state", home.join(".gradle/daemon")),
+        ("Rust cargo registry cache", home.join(".cargo/registry")),
+        ("Rust cargo git cache", home.join(".cargo/git")),
+        ("Rustup downloads cache", home.join(".rustup/downloads")),
+        ("Rustup temp files", home.join(".rustup/tmp")),
+        ("npm cache", home.join(".npm")),
+        ("node-gyp cache", home.join(".cache/node-gyp")),
+        ("npm cache (macOS)", library.join("Caches/npm")),
+        ("node-gyp cache (macOS)", library.join("Caches/node-gyp")),
+        ("pnpm store", home.join(".pnpm-store")),
+        ("pnpm store (macOS)", library.join("pnpm/store")),
+        ("pnpm cache (macOS)", library.join("Caches/pnpm")),
+        ("Yarn cache", home.join(".yarn")),
+        ("Yarn cache (macOS)", library.join("Caches/Yarn")),
+        ("Mise installs/data", home.join(".local/share/mise")),
+        ("Mise cache", home.join(".cache/mise")),
+        ("Mise config", home.join(".config/mise")),
+        ("Homebrew cache", library.join("Caches/Homebrew")),
+    ];
+
+    let mut targets: Vec<_> = candidates
+        .into_iter()
+        .filter_map(|(label, path)| {
+            if !path.exists() {
+                return None;
+            }
+
+            Some(GlobalCleanupTarget {
+                label: label.to_string(),
+                is_dir: path.is_dir(),
+                size: None,
+                path,
+            })
+        })
+        .collect();
+
+    targets.sort_by(|a, b| a.path.cmp(&b.path));
+    targets
+}
+
+pub fn estimate_path_size(path: &Path) -> Option<u64> {
+    path_size_lossy(path)
+}
+
+pub fn estimate_repo_savings(repo_path: &Path) -> RepoSavingsEstimate {
+    RepoSavingsEstimate {
+        repo_path: repo_path.to_path_buf(),
+        delete_size: estimate_path_size(repo_path),
+        clean_size: estimate_cleanable_size(repo_path),
+    }
+}
+
+fn estimate_cleanable_size(repo_path: &Path) -> Option<u64> {
+    let output = Command::new("git")
+        .args(["clean", "-fxnd"])
+        .current_dir(repo_path)
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let rel_paths = parse_git_clean_dry_run(&stdout);
+    let mut abs_paths: Vec<PathBuf> = rel_paths
+        .into_iter()
+        .map(|rel| repo_path.join(rel))
+        .filter(|path| path.exists())
+        .collect();
+
+    prune_nested_paths(&mut abs_paths);
+
+    let mut total = 0_u64;
+    for path in abs_paths {
+        if let Some(size) = estimate_path_size(&path) {
+            total = total.saturating_add(size);
+        }
+    }
+
+    Some(total)
+}
+
+fn parse_git_clean_dry_run(output: &str) -> Vec<PathBuf> {
+    const PREFIX: &str = "Would remove ";
+
+    output
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let rel = trimmed.strip_prefix(PREFIX)?.trim();
+            if rel.is_empty() {
+                return None;
+            }
+            Some(PathBuf::from(rel))
+        })
+        .collect()
+}
+
+fn prune_nested_paths(paths: &mut Vec<PathBuf>) {
+    paths.sort_by(|a, b| {
+        path_depth(a)
+            .cmp(&path_depth(b))
+            .then_with(|| path_sort_key(a).cmp(&path_sort_key(b)))
+    });
+    paths.dedup();
+
+    let mut kept: Vec<PathBuf> = Vec::with_capacity(paths.len());
+    'outer: for path in paths.drain(..) {
+        for existing in &kept {
+            if path.starts_with(existing) {
+                continue 'outer;
+            }
+        }
+        kept.push(path);
+    }
+    *paths = kept;
+}
+
+fn path_depth(path: &Path) -> usize {
+    path.components().count()
+}
+
+fn path_sort_key(path: &Path) -> OsString {
+    path.as_os_str().to_os_string()
+}
+
+fn path_size_lossy(path: &Path) -> Option<u64> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    let file_type = metadata.file_type();
+
+    if file_type.is_symlink() || metadata.is_file() {
+        return Some(metadata.len());
+    }
+
+    if metadata.is_dir() {
+        let mut total = 0_u64;
+        let entries = fs::read_dir(path).ok()?;
+        for entry in entries.flatten() {
+            if let Some(child_size) = path_size_lossy(&entry.path()) {
+                total = total.saturating_add(child_size);
+            }
+        }
+        return Some(total);
+    }
+
+    Some(metadata.len())
 }
