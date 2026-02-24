@@ -311,7 +311,7 @@ impl App {
                         .split(area);
 
                     // Render tree
-                    let tree_widget = TreeWidget::new(&self.tree, title.clone());
+                    let tree_widget = TreeWidget::new(&self.tree, title.clone(), &self.folder);
                     frame.render_stateful_widget(tree_widget, chunks[0], &mut self.state);
 
                     // Render help

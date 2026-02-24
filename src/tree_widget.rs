@@ -5,6 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, StatefulWidget, Widget},
 };
+use std::path::Path;
 
 use crate::tree::{NodeAction, NodeKind, Tree};
 
@@ -54,11 +55,16 @@ impl TreeWidgetState {
 pub struct TreeWidget<'a> {
     tree: &'a Tree,
     title: String,
+    base_path: &'a Path,
 }
 
 impl<'a> TreeWidget<'a> {
-    pub fn new(tree: &'a Tree, title: String) -> Self {
-        Self { tree, title }
+    pub fn new(tree: &'a Tree, title: String, base_path: &'a Path) -> Self {
+        Self {
+            tree,
+            title,
+            base_path,
+        }
     }
 }
 
@@ -147,7 +153,7 @@ impl<'a> StatefulWidget for TreeWidget<'a> {
             if node.kind != NodeKind::Section && !node.path.as_os_str().is_empty() {
                 spans.push(Span::styled(" ", Style::default()));
                 spans.push(Span::styled(
-                    format!("{}", node.path.display()),
+                    display_path(node.path.as_path(), self.base_path),
                     Style::default().fg(Color::DarkGray),
                 ));
             }
@@ -211,6 +217,18 @@ impl<'a> StatefulWidget for TreeWidget<'a> {
         if let Some(message) = &state.loading_message {
             render_loading_dialog(area, buf, message, state.loading_frame);
         }
+    }
+}
+
+fn display_path(path: &Path, base_path: &Path) -> String {
+    if let Ok(relative) = path.strip_prefix(base_path) {
+        if relative.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            relative.display().to_string()
+        }
+    } else {
+        path.display().to_string()
     }
 }
 
